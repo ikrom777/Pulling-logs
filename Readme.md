@@ -1,66 +1,75 @@
-# SSH Log Parser
+# SSH Log Analyser
 
-A small Python tool that reads SSH authentication log lines (as found in `/var/log/auth.log`) and turns them into structured data. It is the first building block of a log analyser for spotting suspicious login activity, such as brute-force attempts.
+A small Python tool that parses SSH authentication logs, counts failed logins per IP address, and flags likely brute-force attacks.
 
-## What it does
+## Features
 
-- Extracts login events from `sshd` log lines using a regular expression.
-- Records the timestamp, event type (`failed` or `accepted`), username and source IP address.
-- Handles failed logins for users that do not exist ("invalid user").
-- Validates every IP address with Python's `ipaddress` module, so values like `999.999.999.999` are rejected even though they match the regex.
-- Skips lines that are not SSH login events (for example `sudo` entries) and logs a warning when a line contains an invalid IP, instead of crashing.
+- **Log parsing**: extracts timestamp, event (`failed` / `accepted`), user and IP from `sshd` password-login lines using a regex. Lines that don't match are ignored.
+- **IP validation**: every IP is checked with Python's `ipaddress` module. Lines with invalid IPs such as `999.999.999.999` are skipped and a warning is logged.
+- **Failed-login counting**: `count_failed_by_ip` returns a `Counter` of failed logins per IP, and `top_offenders` returns the most active ones.
+- **Brute-force detection**: `detect_brute_force` flags any IP with at least `threshold` failed logins inside a sliding time `window`. The defaults are 5 failures within 5 minutes.
 
-## Example
+## How detection works
 
-Input:
+1. Keep only `failed` entries and group them by IP.
+2. Parse each timestamp into a `datetime` (the log has no year, so a `year` parameter is added) and sort each IP's times.
+3. `has_burst` slides a window over the sorted times. If `threshold` failures fall inside the window, the IP is flagged.
 
-```
-Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2
-```
-
-Output:
-
-```python
-{
-    "timestamp": "Oct 25 03:12:01",
-    "event": "failed",
-    "user": "root",
-    "ip": "203.0.113.5",
-}
-```
+A span of exactly `window` between the first and last failure does **not** count as inside the window.
 
 ## Usage
 
-```bash
+```python
+from pullinglogs import parse_log, detect_brute_force, top_offenders
+
+entries = parse_log(lines)                 # list of dicts: timestamp, event, user, ip
+top_offenders(entries, n=3)                # [("203.0.113.5", 12), ...]
+detect_brute_force(entries)                # ["203.0.113.5"]
+detect_brute_force(entries, threshold=3)   # custom threshold
+```
+
+Running the file directly executes a small demo:
+
+```
 python pullinglogs.py
 ```
 
-To use it in your own code:
+Demo output:
 
-```python
-from pullinglogs import parse_line, parse_log
-
-entry = parse_line(line)   # a dict, or None if the line is not usable
-entries = parse_log(lines) # a list of dicts, unusable lines are dropped
+```
+Counter({'203.0.113.5': 2, '198.51.100.7': 1})
+[('203.0.113.5', 2), ('198.51.100.7', 1)]
+['203.0.113.5']
 ```
 
-## Running the tests
+## Tests
 
-```bash
+Tests use `pytest`, with `pytest-cov` for coverage.
+
+```
 pip install pytest pytest-cov
 pytest -v
 pytest --cov=pullinglogs --cov-report=term-missing
 ```
 
-The tests cover accepted and failed logins, invalid users, irregular spacing in timestamps, unrelated lines, empty input, invalid IP handling, and the warning log message (using pytest's `caplog` fixture).
+The tests cover:
 
-## Known limitations
+- parsing, including invalid IPs (with `caplog`) and non-matching lines
+- counting and top offenders, including edge cases
+- `has_burst`: clear burst, spread-out failures, one below the threshold, exactly at the threshold, window edges, a burst in the middle, and an empty list
+- `detect_brute_force`: grouping by IP, ignoring accepted logins, unsorted input, spread-out failures, an empty list and custom parameters
+- an integration test from raw log lines to flagged IPs
 
-- Only IPv4 addresses are matched. Log lines with IPv6 addresses are ignored.
-- The log format is fixed: the hostname in the pattern is `server`, and only password-based `Failed` and `Accepted` events are recognised.
-- Timestamps do not include a year, because the syslog format does not store one.
+Coverage is 90% of the module. The only uncovered lines are the `if __name__ == "__main__":` demo block.
 
-## Planned
+## Limitations
 
-- Count failed logins per IP address to flag possible brute-force attempts.
-- Read log lines from a file instead of a hard-coded list.
+- Only matches `sshd` password logins in this specific log format.
+- Only IPv4 addresses are matched by the regex.
+- Timestamps carry no year, so the year is supplied as a parameter and defaults to 2026.
+
+## Possible next steps
+
+- Support more event types (invalid user, publickey) and IPv6
+- Read logs from a file or stdin
+- Add anomaly detection and an evaluation of it

@@ -1,6 +1,7 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force
 import logging
 import pytest
+from datetime import datetime, timedelta
 
 FAILED = "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2"
 INVALID = "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2"
@@ -10,6 +11,87 @@ BOBB = "Nov 18 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0
 SPACEE = "Nov      1 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0.1 port 50500 ssh2"
 BAD_IPP = "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 999.999.999.999 port 22 ssh2"
 FAILED2 = "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2"
+
+def t(h, m, s=0):
+    return datetime(2026, 10, 26, h, m, s)
+
+@pytest.mark.parametrize(
+    "timestamps, expected",
+    [
+        ([t(10,0,0), t(10,1), t(10,2), t(10,3), t(10,4,59)], True),
+        ([t(10,0), t(10,10), t(10,20), t(10,30), t(10,40)], False),
+        ([t(10,0,0), t(10,0,10), t(10,0,20), t(10,0,30)], False),
+        ([], False),
+        ([t(10,0,0), t(10,1), t(10,2), t(10,3), t(10,5,1)], False),
+        ([t(8,0), t(8,30), t(9,0), t(9,30), t(10,0,0), t(10,0,10), t(10,0,20), t(10,0,30), t(10,0,40), t(11,0), t(11,30)], True),
+    ],
+    ids=["clear_burst", "spread_out", "4entries", "empty", "just_outside_window", "burst_in_middle"],
+)
+def test_has_burst(timestamps, expected):
+    WINDOW = timedelta(minutes=5)
+    assert has_burst(timestamps, threshold=5, window=WINDOW) is expected
+
+A = "203.0.113.5"
+B = "198.51.100.7"
+C = "192.0.2.10"
+
+def e(event, ip, ts):
+    return {"timestamp": ts, "event": event, "user": "root", "ip": ip}
+
+@pytest.mark.parametrize(
+    "entries, expected",
+    [
+        # 1 one_attacker: 5 failures, 10 s apart
+        ([e("failed", A, "Oct 25 03:12:01"), e("failed", A, "Oct 25 03:12:11"),
+          e("failed", A, "Oct 25 03:12:21"), e("failed", A, "Oct 25 03:12:31"),
+          e("failed", A, "Oct 25 03:12:41")], ["203.0.113.5"]),
+
+        # 2 grouping: A and B interleaved, 3 failures each
+        ([e("failed", A, "Oct 25 03:12:01"), e("failed", B, "Oct 25 03:12:11"),
+          e("failed", A, "Oct 25 03:12:21"), e("failed", B, "Oct 25 03:12:31"),
+          e("failed", A, "Oct 25 03:12:41"), e("failed", B, "Oct 25 03:12:51")],[]),
+
+        # 3 filtering: 4 failures plus 1 accepted from the same IP
+        ([e("failed", A, "Oct 25 03:12:01"), e("failed", A, "Oct 25 03:12:11"),
+          e("failed", A, "Oct 25 03:12:21"), e("failed", A, "Oct 25 03:12:31"),
+          e("accepted", A, "Oct 25 03:12:41")], []),
+
+        # 4 sorting: 5 close failures, given in reverse time order
+        ([e("failed", A, "Oct 25 03:12:41"), e("failed", A, "Oct 25 03:12:31"),
+          e("failed", A, "Oct 25 03:12:21"), e("failed", A, "Oct 25 03:12:11"),
+          e("failed", A, "Oct 25 03:12:01")], ["203.0.113.5"]),
+
+        # 5 spread_out: 5 failures, 10 minutes apart
+        ([e("failed", A, "Oct 25 03:00:00"), e("failed", A, "Oct 25 03:10:00"),
+          e("failed", A, "Oct 25 03:20:00"), e("failed", A, "Oct 25 03:30:00"),
+          e("failed", A, "Oct 25 03:40:00")], []),
+
+        # 6 empty
+        ([], []),
+
+        # 7 attacker_and_innocent: A has 5 close failures, B has 2, C only logs in
+        ([e("failed", A, "Oct 25 03:12:01"), e("failed", B, "Oct 25 03:12:05"),
+          e("failed", A, "Oct 25 03:12:11"), e("failed", A, "Oct 25 03:12:21"),
+          e("accepted", C, "Oct 25 03:12:25"), e("failed", B, "Oct 25 03:12:29"),
+          e("failed", A, "Oct 25 03:12:31"), e("failed", A, "Oct 25 03:12:41")], ["203.0.113.5"]),
+
+        # 8 two_attackers: both A and B have 5 close failures
+        ([e("failed", A, "Oct 25 03:12:01"), e("failed", B, "Oct 25 03:12:02"),
+          e("failed", A, "Oct 25 03:12:11"), e("failed", B, "Oct 25 03:12:12"),
+          e("failed", A, "Oct 25 03:12:21"), e("failed", B, "Oct 25 03:12:22"),
+          e("failed", A, "Oct 25 03:12:31"), e("failed", B, "Oct 25 03:12:32"),
+          e("failed", A, "Oct 25 03:12:41"), e("failed", B, "Oct 25 03:12:42")], ["203.0.113.5", "198.51.100.7"]),
+
+        # 9 window_edge: first and last failure exactly 5 minutes apart
+        ([e("failed", A, "Oct 25 03:00:00"), e("failed", A, "Oct 25 03:01:00"),
+          e("failed", A, "Oct 25 03:02:00"), e("failed", A, "Oct 25 03:03:00"),
+          e("failed", A, "Oct 25 03:05:00")], []),
+    ],
+    ids=["one_attacker", "grouping", "filtering", "sorting", "spread_out",
+         "empty", "attacker_and_innocent", "two_attackers", "window_edge"],
+)
+def test_detect_brute_force(entries, expected):
+    assert detect_brute_force(entries) == expected
 
 @pytest.fixture
 def sample_entries():

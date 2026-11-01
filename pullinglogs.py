@@ -1,7 +1,8 @@
 import re
 import ipaddress
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
@@ -11,10 +12,33 @@ PATTERN = re.compile(
     r"(?P<user>\S+) from (?P<ip>\d+\.\d+\.\d+\.\d+)"
 )
 
+def has_burst(timestamps, threshold, window):
+    left = 0
+    for right in range(len(timestamps)):
+        while timestamps[right] - timestamps[left] >= window:
+            left = left + 1
+        count = right - left + 1
+        if count >= threshold:
+            return True
+    return False
+
+def detect_brute_force(entries, threshold=5, window=timedelta(minutes=5), year=2026):
+    groups = defaultdict(list)
+    for entry in entries:
+        if entry["event"] == "failed":
+            when = datetime.strptime(f"{year} {entry['timestamp']}", "%Y %b %d %H:%M:%S")
+            groups[entry["ip"]].append(when)
+
+    flagged = []
+    for ip, times in groups.items():
+        times.sort()
+        if has_burst(times, threshold, window):
+            flagged.append(ip)
+    return flagged
+
 def count_failed_by_ip(entries):
     failed_ips = [entry["ip"] for entry in entries if entry["event"] == "failed"]
     return Counter(failed_ips)
-    
 
 def top_offenders(entries, n=3):
     counts = count_failed_by_ip(entries)
@@ -39,7 +63,6 @@ def parse_line(line):
         "ip": ip,
     }
 
-
 def parse_log(lines):
     results = []
     for line in lines:
@@ -61,3 +84,4 @@ if __name__ == "__main__":
     entries = parse_log(lines)
     print(count_failed_by_ip(entries))
     print(top_offenders(entries, n = 2))
+    print(detect_brute_force(entries, threshold=2))
