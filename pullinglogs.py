@@ -12,6 +12,27 @@ PATTERN = re.compile(
     r"(?P<user>\S+) from (?P<ip>\d+\.\d+\.\d+\.\d+)"
 )
 
+def detect_compromised(entries, threshold=5, window=timedelta(minutes=5), year=2026):
+    failures_by_ip = defaultdict(list)
+    successes = []
+    flagged = []
+    for entry in entries:
+        when = datetime.strptime(f"{year} {entry['timestamp']}", "%Y %b %d %H:%M:%S")
+        if entry["event"] == "failed":
+            failures_by_ip[entry["ip"]].append(when)
+        elif entry["event"] == "accepted":
+            successes.append((entry["user"], entry["ip"], when))
+    for user, ip, when in successes:
+        cutoff = when - window
+        times = failures_by_ip[ip]      
+        count = 0
+        for t in times:
+            if cutoff <= t < when:
+                count += 1
+        if count >= threshold:
+            flagged.append({"ip": ip, "user": user, "timestamp": when, "failures": count})
+    return flagged
+
 def has_burst(timestamps, threshold, window):
     left = 0
     for right in range(len(timestamps)):
@@ -80,8 +101,10 @@ if __name__ == "__main__":
         "Oct 25 03:16:00 server sudo: alice : TTY=pts/0 ; COMMAND=/bin/ls",
         "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 999.999.999.999 port 52341 ssh2",
         "Oct 25 03:12:09 server sshd[1234]: Failed password for root from 203.0.113.5 port 52342 ssh2",
+        "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
     ]
     entries = parse_log(lines)
     print(count_failed_by_ip(entries))
     print(top_offenders(entries, n = 2))
     print(detect_brute_force(entries, threshold=2))
+    print(detect_compromised(entries, threshold=2))

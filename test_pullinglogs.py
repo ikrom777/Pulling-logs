@@ -1,4 +1,4 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised
 import logging
 import pytest
 from datetime import datetime, timedelta
@@ -11,6 +11,56 @@ BOBB = "Nov 18 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0
 SPACEE = "Nov      1 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0.1 port 50500 ssh2"
 BAD_IPP = "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 999.999.999.999 port 22 ssh2"
 FAILED2 = "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2"
+
+def make_entry2(ip, event="failed", user="root", timestamp="Oct 25 03:12:01"):
+    return {"timestamp": timestamp, "event": event, "user": user, "ip": ip}
+
+@pytest.mark.parametrize(
+    "rows, expected_count",
+    [
+        pytest.param(
+            [("failed", "Oct 25 03:12:01", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:05", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:09", "1.1.1.1"),
+             ("accepted", "Oct 25 03:12:30", "1.1.1.1")],
+            1, id="exactly_threshold_flagged"),
+        pytest.param(
+            [("failed", "Oct 25 03:12:01", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:05", "1.1.1.1"),
+             ("accepted", "Oct 25 03:12:30", "1.1.1.1")],
+            0, id="below_threshold"),
+        pytest.param(
+            [("accepted", "Oct 25 03:12:01", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:05", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:09", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:12", "1.1.1.1")],
+            0, id="failures_after_login"),
+        pytest.param(
+            [("failed", "Oct 25 03:12:01", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:05", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:09", "1.1.1.1"),
+             ("accepted", "Oct 25 03:12:30", "2.2.2.2")],
+            0, id="different_ip"),
+        pytest.param(
+            [("failed", "Oct 25 03:00:01", "1.1.1.1"),
+             ("failed", "Oct 25 03:00:05", "1.1.1.1"),
+             ("failed", "Oct 25 03:00:09", "1.1.1.1"),
+             ("accepted", "Oct 25 03:20:00", "1.1.1.1")],
+            0, id="failures_too_old"),
+        pytest.param(
+            [("failed", "Oct 25 03:07:30", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:05", "1.1.1.1"),
+             ("failed", "Oct 25 03:12:09", "1.1.1.1"),
+             ("accepted", "Oct 25 03:12:30", "1.1.1.1")],
+            1, id="failure_exactly_at_cutoff_counts"),
+        pytest.param([], 0, id="empty"),
+    ],
+)
+
+def test_detect_compromised(rows, expected_count):
+    entries = [make_entry2(ip=ip, event=event, timestamp=ts) for event, ts, ip in rows]
+    result = detect_compromised(entries, threshold=3)
+    assert len(result) == expected_count
 
 def t(h, m, s=0):
     return datetime(2026, 10, 26, h, m, s)
