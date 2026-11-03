@@ -1,4 +1,4 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section
 import logging
 import pytest
 from datetime import datetime, timedelta
@@ -248,3 +248,65 @@ def test_emptyinput():
     result2 = parse_log([])
     assert result is None
     assert result2 == []
+
+def test_top_offenders_rows():
+    lines = top_offenders_section([("203.0.113.5", 2), ("198.51.100.7", 1)])
+    assert lines[0] == "TOP OFFENDERS (total failed logins)"
+    assert len(lines) == 3
+    assert lines[1].startswith("203.0.113.5")
+    assert lines[1].split()[-1] == "2"
+    assert lines[2].startswith("198.51.100.7")
+
+
+def test_top_offenders_empty():
+    lines = top_offenders_section([])
+    assert lines == [
+        "TOP OFFENDERS (total failed logins)",
+        "No failed logins recorded.",
+    ]
+
+def test_compromised_section_sorted():
+    data = [
+        {"ip": "198.51.100.7", "user": "admin",
+         "timestamp": datetime(2026, 10, 25, 3, 20, 0), "failures": 2},
+        {"ip": "203.0.113.5", "user": "root",
+         "timestamp": datetime(2026, 10, 25, 3, 12, 30), "failures": 7},
+    ]
+    lines = compromised_section(data)
+    assert lines[0] == "COMPROMISED (failures followed by a successful login)"
+    assert len(lines) == 3
+    assert lines[1].startswith("203.0.113.5")
+    assert lines[1].split()[-3] == "7"
+    assert lines[1].split()[-1] == "03:12:30"
+
+
+def test_compromised_section_empty():
+    lines = compromised_section([])
+    assert lines == [
+        "COMPROMISED (failures followed by a successful login)",
+        'No compromised logins detected.',
+    ]
+
+def test_brute_force_section_mixed():
+    flagged = ["203.0.113.5", "198.51.100.7"]
+    compromised = [
+        {"ip": "203.0.113.5", "user": "root",
+         "timestamp": datetime(2026, 10, 25, 3, 12, 30), "failures": 2},
+    ]
+    lines = brute_force_section(flagged, compromised)
+    assert lines[0] == "BRUTE FORCE (burst of failed logins)"
+    assert lines[1].startswith("203.0.113.5")
+    assert "(also compromised)" in lines[1]
+    assert lines[2].startswith("198.51.100.7")
+    assert "(also compromised)" not in lines[2]
+
+def test_brute_force_section_empty():
+    lines = brute_force_section([], [])
+    assert lines == [
+        "BRUTE FORCE (burst of failed logins)",
+        "No brute-force activity detected.",
+    ]
+
+def test_brute_force_section_no_compromised():
+    lines = brute_force_section(["198.51.100.7"], [])
+    assert lines[-1] == ("198.51.100.7    ")

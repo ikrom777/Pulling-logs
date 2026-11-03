@@ -33,6 +33,18 @@ def detect_compromised(entries, threshold=5, window=timedelta(minutes=5), year=2
             flagged.append({"ip": ip, "user": user, "timestamp": when, "failures": count})
     return flagged
 
+def compromised_section(compromised):
+    lines = ["COMPROMISED (failures followed by a successful login)"]
+    if not compromised:
+        lines.append('No compromised logins detected.')
+    for item in sorted(compromised, key=lambda item: item["failures"], reverse=True):
+        ip = item["ip"]
+        user = item["user"]
+        failures = item["failures"]
+        time = item["timestamp"]
+        lines.append(f"{ip:<16}{user:<10}{failures:<5}{time}")
+    return lines
+
 def has_burst(timestamps, threshold, window):
     left = 0
     for right in range(len(timestamps)):
@@ -57,6 +69,19 @@ def detect_brute_force(entries, threshold=5, window=timedelta(minutes=5), year=2
             flagged.append(ip)
     return flagged
 
+def brute_force_section(flagged, compromised):
+    lines = ["BRUTE FORCE (burst of failed logins)"]
+    if not flagged:
+        lines.append("No brute-force activity detected.")
+        return lines
+    compromised_ips = set()
+    for item in compromised:
+        compromised_ips.add(item["ip"])
+    for ip in flagged:
+        label = "(also compromised)" if ip in compromised_ips else ""
+        lines.append(f"{ip:<16}{label}")
+    return lines
+
 def count_failed_by_ip(entries):
     failed_ips = [entry["ip"] for entry in entries if entry["event"] == "failed"]
     return Counter(failed_ips)
@@ -64,6 +89,15 @@ def count_failed_by_ip(entries):
 def top_offenders(entries, n=3):
     counts = count_failed_by_ip(entries)
     return counts.most_common(n)
+
+def top_offenders_section(offenders):
+    lines = ["TOP OFFENDERS (total failed logins)"]
+    if not offenders:
+        lines.append("No failed logins recorded.")
+        return lines
+    for ip, count in offenders:
+        lines.append(f"{ip:<16}{count:<10}")
+    return lines
 
 def parse_line(line):
     match = PATTERN.search(line)
@@ -104,6 +138,15 @@ if __name__ == "__main__":
         "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
     ]
     entries = parse_log(lines)
+    result = detect_compromised(entries, threshold=2)
+    section = compromised_section(result)
+    result_offenders = top_offenders(entries, n=2)
+    section_offenders = top_offenders_section(result_offenders)
+    flagged = detect_brute_force(entries, threshold=2)
+    compromised = detect_compromised(entries, threshold=2)
+    print("\n".join(section))
+    print("\n".join(brute_force_section(flagged, compromised)))
+    print("\n".join(top_offenders_section(top_offenders(entries, n=2))))
     print(count_failed_by_ip(entries))
     print(top_offenders(entries, n = 2))
     print(detect_brute_force(entries, threshold=2))

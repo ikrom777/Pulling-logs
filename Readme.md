@@ -1,75 +1,100 @@
 # SSH Log Analyser
 
-A small Python tool that parses SSH authentication logs, counts failed logins per IP address, and flags likely brute-force attacks.
+A small Python tool that parses SSH authentication logs (`sshd` lines) and flags suspicious activity: heavy failed-login sources, brute-force bursts, and logins that succeeded right after repeated failures.
+
+Built as a learning project in security and Python, with a focus on clean, testable functions.
 
 ## Features
 
-- **Log parsing**: extracts timestamp, event (`failed` / `accepted`), user and IP from `sshd` password-login lines using a regex. Lines that don't match are ignored.
-- **IP validation**: every IP is checked with Python's `ipaddress` module. Lines with invalid IPs such as `999.999.999.999` are skipped and a warning is logged.
-- **Failed-login counting**: `count_failed_by_ip` returns a `Counter` of failed logins per IP, and `top_offenders` returns the most active ones.
-- **Brute-force detection**: `detect_brute_force` flags any IP with at least `threshold` failed logins inside a sliding time `window`. The defaults are 5 failures within 5 minutes.
+- **Log parsing:** extracts timestamp, event (failed/accepted), user and IP from `sshd` lines using a regular expression. Lines that don't match are ignored.
+- **IP validation:** every IP is checked with the standard `ipaddress` module. Invalid addresses (for example `999.999.999.999`) are skipped and a warning is logged.
+- **Failed logins per IP:** `count_failed_by_ip` returns a `Counter`, and `top_offenders` returns the worst `n` IPs.
+- **Brute-force detection:** `detect_brute_force` flags IPs with at least `threshold` failed logins inside a sliding time window.
+- **Compromise detection:** `detect_compromised` flags successful logins that were preceded by at least `threshold` failures from the same IP within the window.
+- **Report sections:** `compromised_section`, `brute_force_section` and `top_offenders_section` turn detection results into lists of formatted lines. They return data and never print, which keeps them easy to test.
 
-## How detection works
+## Requirements
 
-1. Keep only `failed` entries and group them by IP.
-2. Parse each timestamp into a `datetime` (the log has no year, so a `year` parameter is added) and sort each IP's times.
-3. `has_burst` slides a window over the sorted times. If `threshold` failures fall inside the window, the IP is flagged.
+- Python 3.10 or newer
+- `pytest` and `pytest-cov` for the tests
 
-A span of exactly `window` between the first and last failure does **not** count as inside the window.
+The analyser itself only uses the standard library.
 
 ## Usage
 
-```python
-from pullinglogs import parse_log, detect_brute_force, top_offenders
+The file `pullinglogs.py` contains the functions and a demo in its `__main__` block, which runs on a hardcoded sample log:
 
-entries = parse_log(lines)                 # list of dicts: timestamp, event, user, ip
-top_offenders(entries, n=3)                # [("203.0.113.5", 12), ...]
-detect_brute_force(entries)                # ["203.0.113.5"]
-detect_brute_force(entries, threshold=3)   # custom threshold
-```
-
-Running the file directly executes a small demo:
-
-```
+```bash
 python pullinglogs.py
 ```
 
-Demo output:
+Using the functions in your own code:
+
+```python
+from datetime import timedelta
+from pullinglogs import (
+    parse_log, count_failed_by_ip, top_offenders,
+    detect_brute_force, detect_compromised,
+)
+
+with open("auth.log") as f:
+    entries = parse_log(f)
+
+print(top_offenders(entries, n=3))
+print(detect_brute_force(entries, threshold=5, window=timedelta(minutes=5)))
+print(detect_compromised(entries, threshold=5, window=timedelta(minutes=5)))
+```
+
+### Example
+
+Input lines:
 
 ```
-Counter({'203.0.113.5': 2, '198.51.100.7': 1})
-[('203.0.113.5', 2), ('198.51.100.7', 1)]
-['203.0.113.5']
+Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2
+Oct 25 03:12:09 server sshd[1234]: Failed password for root from 203.0.113.5 port 52342 ssh2
+Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2
+Oct 25 03:15:44 server sshd[1301]: Accepted password for alice from 192.0.2.10 port 50500 ssh2
 ```
+
+With `threshold=2`:
+
+```python
+detect_brute_force(entries, threshold=2)
+# ['203.0.113.5']
+
+detect_compromised(entries, threshold=2)
+# [{'ip': '203.0.113.5', 'user': 'root',
+#   'timestamp': datetime(2026, 10, 25, 3, 12, 30), 'failures': 2}]
+```
+
+`alice` is not flagged, because she had no failed logins before her successful one.
+
+## How detection works
+
+- **Brute force** groups failed logins by IP, sorts each IP's timestamps, and uses a sliding window (two pointers) to check whether `threshold` failures fall inside one window.
+- **Compromise** collects failures per IP and all successful logins, then for each success counts that IP's failures in the half-open interval `[login time - window, login time)`.
 
 ## Tests
 
-Tests use `pytest`, with `pytest-cov` for coverage.
-
-```
-pip install pytest pytest-cov
-pytest -v
+```bash
+pytest
 pytest --cov=pullinglogs --cov-report=term-missing
 ```
 
-The tests cover:
+The suite covers parsing, IP validation (including logging checks with `caplog`), counting, both detectors with threshold and boundary cases (parametrized), and the report section helpers.
 
-- parsing, including invalid IPs (with `caplog`) and non-matching lines
-- counting and top offenders, including edge cases
-- `has_burst`: clear burst, spread-out failures, one below the threshold, exactly at the threshold, window edges, a burst in the middle, and an empty list
-- `detect_brute_force`: grouping by IP, ignoring accepted logins, unsorted input, spread-out failures, an empty list and custom parameters
-- an integration test from raw log lines to flagged IPs
-
-Coverage is 90% of the module. The only uncovered lines are the `if __name__ == "__main__":` demo block.
+Current coverage is 87%. The uncovered lines are the `if __name__ == "__main__":` demo block.
 
 ## Limitations
 
-- Only matches `sshd` password logins in this specific log format.
-- Only IPv4 addresses are matched by the regex.
-- Timestamps carry no year, so the year is supplied as a parameter and defaults to 2026.
+- Only the `sshd` password format (`Failed password` / `Accepted password`) is parsed. Other methods, such as public key authentication, are not matched.
+- Only IPv4 addresses are matched by the regular expression.
+- Syslog timestamps have no year, so the year is a parameter (default `2026`).
+- The demo uses a hardcoded sample, and there is no command-line interface yet.
 
 ## Possible next steps
 
-- Support more event types (invalid user, publickey) and IPv6
-- Read logs from a file or stdin
-- Add anomaly detection and an evaluation of it
+- Combine the report sections into one `build_report` function.
+- Add a command-line interface with `argparse` that reads a log file path.
+- Support more `sshd` message formats and IPv6.
+- Add anomaly detection for unusual login times and usernames.
