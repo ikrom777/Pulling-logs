@@ -1,4 +1,4 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section, build_report
 import logging
 import pytest
 from datetime import datetime, timedelta
@@ -11,6 +11,53 @@ BOBB = "Nov 18 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0
 SPACEE = "Nov      1 09:12:13 server sshd[3213]: Accepted password for bob from 10.0.0.1 port 50500 ssh2"
 BAD_IPP = "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 999.999.999.999 port 22 ssh2"
 FAILED2 = "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2"
+
+@pytest.fixture
+def sample_entries1():
+    lines = [
+        "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2",
+        "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2",
+        "Oct 25 03:15:44 server sshd[1301]: Accepted password for alice from 192.0.2.10 port 50500 ssh2",
+        "Oct 25 03:16:00 server sudo: alice : TTY=pts/0 ; COMMAND=/bin/ls",
+        "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 999.999.999.999 port 52341 ssh2",
+        "Oct 25 03:12:09 server sshd[1234]: Failed password for root from 203.0.113.5 port 52342 ssh2",
+        "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
+    ]
+    entries = parse_log(lines)
+    return entries
+
+@pytest.fixture
+def sample_report(sample_entries1):
+    return build_report(sample_entries1, threshold=2, n=2)
+
+def test_report_quiet_case(sample_entries1):
+    report = build_report(sample_entries1, threshold=100, n=2)
+    assert "No compromised logins detected." in report
+    assert "No brute-force activity detected." in report
+    assert "203.0.113.5" in report
+    assert "root" not in report
+    assert "(also compromised)" not in report
+
+def test_report_section_order(sample_report):
+    lines = sample_report.split("\n")
+    compromised_pos = lines.index("COMPROMISED (failures followed by a successful login)")
+    brute_force_pos = lines.index("BRUTE FORCE (burst of failed logins)")
+    top_offenders_pos = lines.index("TOP OFFENDERS (total failed logins)")
+
+    assert compromised_pos < brute_force_pos < top_offenders_pos
+
+def test_contains_key_details(sample_report):
+    assert "root" in sample_report
+    assert "203.0.113.5" in sample_report
+    assert "(also compromised)" in sample_report
+
+def test_report_spacing(sample_report):
+    lines = sample_report.split("\n")
+    brute_force_pos = lines.index("BRUTE FORCE (burst of failed logins)")
+    top_offenders_pos = lines.index("TOP OFFENDERS (total failed logins)")
+    assert lines[-1] != ""
+    assert lines[brute_force_pos - 1] == ""
+    assert lines[top_offenders_pos - 1] == ""
 
 def make_entry2(ip, event="failed", user="root", timestamp="Oct 25 03:12:01"):
     return {"timestamp": timestamp, "event": event, "user": user, "ip": ip}

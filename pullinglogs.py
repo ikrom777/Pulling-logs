@@ -126,6 +126,17 @@ def parse_log(lines):
             results.append(result)
     return results
 
+def build_report(entries, threshold=5, window=timedelta(minutes=5), year=2026, n=3):
+    report = []
+    result = detect_compromised(entries, threshold=threshold, window=window, year=year)
+    flagged = detect_brute_force(entries, threshold=threshold, window=window, year=year)
+    report.extend(compromised_section(result))
+    report.append("")
+    report.extend(brute_force_section(flagged, result))
+    report.append("")
+    report.extend(top_offenders_section(top_offenders(entries, n=n)))
+    return "\n".join(report)
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     lines = [
@@ -138,16 +149,6 @@ if __name__ == "__main__":
         "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
     ]
     entries = parse_log(lines)
-    result = detect_compromised(entries, threshold=2)
-    section = compromised_section(result)
-    result_offenders = top_offenders(entries, n=2)
-    section_offenders = top_offenders_section(result_offenders)
-    flagged = detect_brute_force(entries, threshold=2)
-    compromised = detect_compromised(entries, threshold=2)
-    print("\n".join(section))
-    print("\n".join(brute_force_section(flagged, compromised)))
-    print("\n".join(top_offenders_section(top_offenders(entries, n=2))))
     print(count_failed_by_ip(entries))
     print(top_offenders(entries, n = 2))
-    print(detect_brute_force(entries, threshold=2))
-    print(detect_compromised(entries, threshold=2))
+    print(build_report(entries, threshold=2, n=2))
