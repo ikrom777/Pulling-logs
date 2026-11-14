@@ -1,4 +1,4 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section, build_report
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section, build_report, main
 import logging
 import pytest
 from datetime import datetime, timedelta
@@ -357,3 +357,22 @@ def test_brute_force_section_empty():
 def test_brute_force_section_no_compromised():
     lines = brute_force_section(["198.51.100.7"], [])
     assert lines[-1] == ("198.51.100.7    ")
+
+LINES = [
+    "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2",
+    "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2",
+    "Oct 25 03:15:44 server sshd[1301]: Accepted password for alice from 192.0.2.10 port 50500 ssh2",
+    "Oct 25 03:16:00 server sudo: alice : TTY=pts/0 ; COMMAND=/bin/ls",
+    "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 999.999.999.999 port 52341 ssh2",
+    "Oct 25 03:12:09 server sshd[1234]: Failed password for root from 203.0.113.5 port 52342 ssh2",
+    "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
+]
+
+
+def test_happy_path(tmp_path):
+    log = tmp_path / "auth.log"
+    log.write_text("\n".join(LINES) + "\n", encoding="utf-8")
+    result = main([str(log)])
+    assert "COMPROMISED" in result
+    assert "203.0.113.5" in result
+    assert "No compromised logins detected" not in result

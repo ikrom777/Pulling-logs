@@ -1,73 +1,47 @@
-# SSH Log Analyser
+# Pulling Logs: SSH Auth Log Analyser
 
-A small Python tool that reads SSH authentication log lines (syslog format), detects suspicious activity, and prints a plain-text report.
+A small Python command-line tool that reads a Linux auth log and flags suspicious SSH activity.
 
-It looks for three things:
+## What it detects
 
-- **Compromised logins**: an IP that failed to log in several times within a short window and was then followed by a successful login.
-- **Brute-force bursts**: an IP with many failed logins inside a short time window, whether or not it eventually got in.
-- **Top offenders**: the IPs with the most failed logins overall.
+- **Compromised logins:** an IP with failed logins followed by a successful login
+- **Brute force:** a burst of failed logins from one IP within a time window
+- **Top offenders:** the IPs with the most failed logins
+
+Lines with an invalid IP address (for example `999.999.999.999`) are skipped with a logged warning.
 
 ## Requirements
 
-- Python 3.9 or newer (standard library only)
-- `pytest` and `pytest-cov` for the tests
+- Python 3.10+
+- `pytest` and `pytest-cov` (only for running the tests)
 
-## Quick start
-
-```python
-from pullinglogs import parse_log, build_report
-
-with open("auth.log") as f:
-    entries = parse_log(f)
-
-print(build_report(entries, threshold=5, n=3))
-```
-
-`pullinglogs.py` also contains a demo in its `__main__` block, which you can run with:
+## Usage
 
 ```
-python pullinglogs.py
+python pullinglogs.py LOGFILE [-t THRESHOLD] [-w WINDOW] [-y YEAR] [-n TOP]
 ```
 
-## Input format
+| Option | Meaning | Default |
+|---|---|---|
+| `LOGFILE` | Path to the log file | required |
+| `-t`, `--threshold` | Minimum failed logins before an IP is flagged | 2 |
+| `-w`, `--window` | Time window in minutes for detecting bursts | 5 |
+| `-y`, `--year` | Year to use, since syslog timestamps have no year | 2026 |
+| `-n`, `--top` | Number of top offenders to show | 3 |
 
-The parser expects `sshd` lines like these:
+Example:
 
 ```
-Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2
-Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2
-Oct 25 03:15:44 server sshd[1301]: Accepted password for alice from 192.0.2.10 port 50500 ssh2
+python pullinglogs.py sample_auth.log --threshold 3 --window 10 --top 5
 ```
 
-- Lines that don't match (for example `sudo` lines) are skipped.
-- Lines with an invalid IP address (for example `999.999.999.999`) are skipped, and a warning is logged.
-- Syslog timestamps have no year, so the `year` parameter supplies one (default `2026`).
+Show all options with:
 
-## Main functions
-
-| Function | What it does |
-|----------|--------------|
-| `parse_log(lines)` | Turns raw lines into a list of dicts with `timestamp`, `event`, `user` and `ip`. |
-| `detect_compromised(entries, threshold, window, year)` | Returns logins that came after at least `threshold` failures from the same IP inside `window`. |
-| `detect_brute_force(entries, threshold, window, year)` | Returns IPs with at least `threshold` failed logins inside `window`, using a sliding window. |
-| `top_offenders(entries, n)` | Returns the `n` IPs with the most failed logins. |
-| `build_report(entries, threshold, window, year, n)` | Runs all detectors and returns the full report as one string. |
-
-## Report settings
-
-`build_report` accepts these parameters:
-
-| Parameter | Default | Meaning |
-|-----------|---------|---------|
-| `threshold` | `5` | Failed logins needed to flag a compromise or a brute-force burst |
-| `window` | `timedelta(minutes=5)` | Time span in which the failures must happen |
-| `year` | `2026` | Year added to timestamps |
-| `n` | `3` | Number of top offenders to list |
+```
+python pullinglogs.py -h
+```
 
 ## Example output
-
-Using the demo lines with `threshold=2` and `n=2`:
 
 ```
 COMPROMISED (failures followed by a successful login)
@@ -81,25 +55,18 @@ TOP OFFENDERS (total failed logins)
 198.51.100.7    1
 ```
 
-When nothing is detected, each section says so, for example `No compromised logins detected.`
+A sample log file, `sample_auth.log`, is included in the repository.
 
-An IP flagged as both a burst and a compromise is marked `(also compromised)` in the brute-force section.
-
-## Tests
+## Running the tests
 
 ```
+pytest
 pytest --cov=pullinglogs --cov-report=term-missing
 ```
 
-Current coverage is 95%. Only the `__main__` demo block is uncovered.
+Current coverage is 98%. The only uncovered lines are the `__main__` entry point.
 
-The report tests check:
+## Project notes
 
-- the three sections appear in the right order,
-- key details (user, IP, the `(also compromised)` marker) are present,
-- blank lines separate the sections and the report doesn't end with a blank line,
-- the quiet case, where a very high threshold produces the "No ... detected" messages.
-
-## Planned
-
-- Command-line interface (`argparse`) so the report can be run on a log file directly.
+- The command-line interface is built with `argparse`. `main(argv=None)` returns the report as text, so tests call it directly without needing a terminal.
+- Code was scanned with Bandit.

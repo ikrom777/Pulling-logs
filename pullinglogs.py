@@ -3,6 +3,7 @@ import ipaddress
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+import argparse
 
 log = logging.getLogger(__name__)
 
@@ -137,18 +138,28 @@ def build_report(entries, threshold=5, window=timedelta(minutes=5), year=2026, n
     report.extend(top_offenders_section(top_offenders(entries, n=n)))
     return "\n".join(report)
 
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("logfile", help="path to the log file")
+    parser.add_argument("-t", "--threshold", type=int, default=2)
+    parser.add_argument("-w", "--window", type=int, default=5)
+    parser.add_argument("-y", "--year", type=int, default=2026)
+    parser.add_argument("-n", "--top", type=int, default=3)
+
+    args = parser.parse_args(argv)
+
+    with open(args.logfile, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+
+    entries = parse_log(lines)
+
+    failed = count_failed_by_ip(entries)
+    offenders = top_offenders(entries, n=args.top)
+    report = build_report(entries, threshold=args.threshold, window=timedelta(minutes=args.window), year=args.year, n=args.top)
+    
+    return "\n".join([str(failed), str(offenders), report])
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    lines = [
-        "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 203.0.113.5 port 52341 ssh2",
-        "Oct 25 03:12:05 server sshd[1234]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2",
-        "Oct 25 03:15:44 server sshd[1301]: Accepted password for alice from 192.0.2.10 port 50500 ssh2",
-        "Oct 25 03:16:00 server sudo: alice : TTY=pts/0 ; COMMAND=/bin/ls",
-        "Oct 25 03:12:01 server sshd[1234]: Failed password for root from 999.999.999.999 port 52341 ssh2",
-        "Oct 25 03:12:09 server sshd[1234]: Failed password for root from 203.0.113.5 port 52342 ssh2",
-        "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
-    ]
-    entries = parse_log(lines)
-    print(count_failed_by_ip(entries))
-    print(top_offenders(entries, n = 2))
-    print(build_report(entries, threshold=2, n=2))
+    print(main())
