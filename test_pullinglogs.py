@@ -1,5 +1,6 @@
-from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section, build_report, main
+from pullinglogs import parse_line, parse_log, count_failed_by_ip, top_offenders, has_burst, detect_brute_force, detect_compromised, top_offenders_section, brute_force_section, compromised_section, build_report, main, resolve_hostname
 import logging
+import socket
 import pytest
 from datetime import datetime, timedelta
 
@@ -301,7 +302,7 @@ def test_top_offenders_rows():
     assert lines[0] == "TOP OFFENDERS (total failed logins)"
     assert len(lines) == 3
     assert lines[1].startswith("203.0.113.5")
-    assert lines[1].split()[-1] == "2"
+    assert lines[1].split()[-1] == "hostname"
     assert lines[2].startswith("198.51.100.7")
 
 
@@ -368,7 +369,6 @@ LINES = [
     "Oct 25 03:12:30 server sshd[1400]: Accepted password for root from 203.0.113.5 port 52350 ssh2",
 ]
 
-
 def test_happy_path(tmp_path):
     log = tmp_path / "auth.log"
     log.write_text("\n".join(LINES) + "\n", encoding="utf-8")
@@ -376,3 +376,23 @@ def test_happy_path(tmp_path):
     assert "COMPROMISED" in result
     assert "203.0.113.5" in result
     assert "No compromised logins detected" not in result
+
+def test_top_offenders_section_shows_hostnames(monkeypatch):
+    fake_names = {"203.0.113.5": "scanner.example.net"}
+
+    def fake_resolve(ip):
+        return fake_names.get(ip)
+
+    monkeypatch.setattr("pullinglogs.resolve_hostname", fake_resolve)
+
+    lines = top_offenders_section([("203.0.113.5", 2), ("198.51.100.7", 1)])
+
+    assert "scanner.example.net" in lines[1]
+
+def test_resolve_hostname_returns_name(monkeypatch):
+    def fake_lookup(ip):
+        return ("scanner.example.net", [], [ip])
+
+    monkeypatch.setattr(socket, "gethostbyaddr", fake_lookup)
+
+    assert resolve_hostname("203.0.113.5") == "scanner.example.net"

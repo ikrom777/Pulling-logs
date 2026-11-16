@@ -4,6 +4,7 @@ import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 import argparse
+import socket
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +98,9 @@ def top_offenders_section(offenders):
         lines.append("No failed logins recorded.")
         return lines
     for ip, count in offenders:
-        lines.append(f"{ip:<16}{count:<10}")
+        name = resolve_hostname(ip)
+        shown = name or "no hostname"
+        lines.append(f"{ip:<16}{count:<10}{shown:<5}")
     return lines
 
 def parse_line(line):
@@ -159,6 +162,11 @@ def main(argv=None):
     
     return "\n".join([str(failed), str(offenders), report])
 
+def resolve_hostname(ip):
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except OSError:
+        return None
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
